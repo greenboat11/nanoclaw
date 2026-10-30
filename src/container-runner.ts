@@ -202,7 +202,9 @@ function buildVolumeMounts(
   // Copy agent-runner source into a per-group writable location so agents
   // can customize it (add tools, change behavior) without affecting other
   // groups. Recompiled on container startup via entrypoint.sh.
-  const useOpenRouterRunner = group.containerConfig?.provider === 'openrouter' || group.containerConfig?.provider === 'googleai';
+  const useOpenRouterRunner =
+    group.containerConfig?.provider === 'openrouter' ||
+    group.containerConfig?.provider === 'googleai';
   const agentRunnerSrc = path.join(
     projectRoot,
     'container',
@@ -255,16 +257,23 @@ function buildContainerArgs(
   if (isGoogleAI) {
     // Google AI Studio: OpenAI-compatible endpoint, free tier with function calling
     const envFile = readEnvFile(['GOOGLE_AI_STUDIO_API_KEY']);
-    const googleKey = process.env.GOOGLE_AI_STUDIO_API_KEY || envFile.GOOGLE_AI_STUDIO_API_KEY || '';
+    const googleKey =
+      process.env.GOOGLE_AI_STUDIO_API_KEY ||
+      envFile.GOOGLE_AI_STUDIO_API_KEY ||
+      '';
     args.push('-e', `OPENAI_API_KEY=${googleKey}`);
-    args.push('-e', `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`);
-    const groupDefault = group.containerConfig?.openrouterModel || 'gemini-2.0-flash';
+    args.push(
+      '-e',
+      `OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai`,
+    );
+    const groupDefault =
+      group.containerConfig?.openrouterModel || 'gemini-2.0-flash';
     const GOOGLE_MODEL_MAP: Record<string, string> = {
       'claude-haiku-4-5-20251001': 'gemini-2.0-flash',
-      'claude-sonnet-4-6':         'gemini-2.5-flash',
-      'claude-opus-4-6':           'gemini-2.5-pro',
-      'gpt-4o':                    'gemini-2.5-pro',
-      'gemma-4-31b-it':            'gemma-4-31b-it',
+      'claude-sonnet-4-6': 'gemini-2.5-flash',
+      'claude-opus-4-6': 'gemini-2.5-pro',
+      'gpt-4o': 'gemini-2.5-pro',
+      'gemma-4-31b-it': 'gemma-4-31b-it',
     };
     const googleModel = modelOverride
       ? (GOOGLE_MODEL_MAP[modelOverride] ?? modelOverride)
@@ -274,25 +283,31 @@ function buildContainerArgs(
     // OpenRouter groups: inject API key and model directly.
     // The credential proxy is Anthropic-specific and is bypassed here.
     const envFile = readEnvFile(['OPENROUTER_API_KEY']);
-    const openrouterKey = process.env.OPENROUTER_API_KEY || envFile.OPENROUTER_API_KEY || '';
+    const openrouterKey =
+      process.env.OPENROUTER_API_KEY || envFile.OPENROUTER_API_KEY || '';
     args.push('-e', `OPENROUTER_API_KEY=${openrouterKey}`);
     // Map Anthropic/keyword model IDs to OpenRouter model IDs.
     // Keywords like "haiku", "sonnet", "opus", "gpt4o" produce Anthropic/OpenAI
     // model IDs; translate those to OpenRouter's namespace here.
     const OPENROUTER_MODEL_MAP: Record<string, string> = {
       'claude-haiku-4-5-20251001': 'anthropic/claude-haiku-4-5',
-      'claude-sonnet-4-6':         'anthropic/claude-sonnet-4-6',
-      'claude-opus-4-6':           'anthropic/claude-opus-4-6',
-      'gpt-4o':                    'openai/gpt-4o',
+      'claude-sonnet-4-6': 'anthropic/claude-sonnet-4-6',
+      'claude-opus-4-6': 'anthropic/claude-opus-4-6',
+      'gpt-4o': 'openai/gpt-4o',
     };
-    const groupDefault = group.containerConfig?.openrouterModel || 'meta-llama/llama-3.3-70b-instruct:free';
+    const groupDefault =
+      group.containerConfig?.openrouterModel ||
+      'meta-llama/llama-3.3-70b-instruct:free';
     const openrouterModel = modelOverride
       ? (OPENROUTER_MODEL_MAP[modelOverride] ?? modelOverride)
       : groupDefault;
     args.push('-e', `OPENROUTER_MODEL=${openrouterModel}`);
     // Free-tier fallback chain: if the primary model is rate-limited, OpenRouter
     // automatically retries with the next model in the list.
-    args.push('-e', `OPENROUTER_FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct:free`);
+    args.push(
+      '-e',
+      `OPENROUTER_FALLBACK_MODELS=meta-llama/llama-3.3-70b-instruct:free`,
+    );
   } else {
     // Route API traffic through the credential proxy (containers never see real secrets)
     args.push(
@@ -314,7 +329,11 @@ function buildContainerArgs(
     // Forward model selection to container — per-request override takes priority,
     // then process.env, then .env file (NanoClaw does not load .env into process.env)
     const envFile = readEnvFile(['ANTHROPIC_MODEL']);
-    const model = modelOverride || process.env.ANTHROPIC_MODEL || envFile.ANTHROPIC_MODEL || 'claude-haiku-4-5-20251001';
+    const model =
+      modelOverride ||
+      process.env.ANTHROPIC_MODEL ||
+      envFile.ANTHROPIC_MODEL ||
+      'claude-haiku-4-5-20251001';
     args.push('-e', `ANTHROPIC_MODEL=${model}`);
   }
 
@@ -358,7 +377,12 @@ export async function runContainerAgent(
   const mounts = buildVolumeMounts(group, input.isMain);
   const safeName = group.folder.replace(/[^a-zA-Z0-9-]/g, '-');
   const containerName = `nanoclaw-${safeName}-${Date.now()}`;
-  const containerArgs = buildContainerArgs(mounts, containerName, group, input.model);
+  const containerArgs = buildContainerArgs(
+    mounts,
+    containerName,
+    group,
+    input.model,
+  );
 
   logger.debug(
     {

@@ -93,7 +93,9 @@ export class GmailChannel implements Channel {
     // Check if inbound polling is disabled (cost-saving mode)
     const env = readEnvFile(['GMAIL_POLLING_DISABLED']);
     if (env.GMAIL_POLLING_DISABLED === 'true') {
-      logger.info('Gmail inbound polling disabled (GMAIL_POLLING_DISABLED=true). Send-only mode active.');
+      logger.info(
+        'Gmail inbound polling disabled (GMAIL_POLLING_DISABLED=true). Send-only mode active.',
+      );
       return;
     }
 

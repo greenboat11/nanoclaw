@@ -167,7 +167,10 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   // Don't retry a group that recently hit a rate limit — back off first.
   const backoffUntil = rateLimitBackoffUntil[chatJid] ?? 0;
   if (Date.now() < backoffUntil) {
-    logger.debug({ group: group?.name, backoffRemaining: backoffUntil - Date.now() }, 'Rate limit backoff active, skipping');
+    logger.debug(
+      { group: group?.name, backoffRemaining: backoffUntil - Date.now() },
+      'Rate limit backoff active, skipping',
+    );
     return true;
   }
 
@@ -192,9 +195,12 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   }
 
   // Determine model and session strategy from message keywords
-  const { model, useExistingSession, cleanMessages } = parseMessageIntent(missedMessages);
+  const { model, useExistingSession, cleanMessages } =
+    parseMessageIntent(missedMessages);
   // Fresh context by default — only carry history when "continue"/"follow up" is present
-  const sessionIdToUse = useExistingSession ? sessions[group.folder] : undefined;
+  const sessionIdToUse = useExistingSession
+    ? sessions[group.folder]
+    : undefined;
   if (model) {
     logger.info({ group: group.name, model }, 'Model upgraded via keyword');
   }
@@ -234,32 +240,42 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   let hadError = false;
   let outputSentToUser = false;
 
-  const output = await runAgent(group, prompt, chatJid, async (result) => {
-    // Streaming output callback — called for each agent result
-    if (result.result) {
-      const raw =
-        typeof result.result === 'string'
-          ? result.result
-          : JSON.stringify(result.result);
-      // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
-      const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
-      logger.info({ group: group.name }, `Agent output: ${raw.slice(0, 200)}`);
-      if (text) {
-        await channel.sendMessage(chatJid, text);
-        outputSentToUser = true;
+  const output = await runAgent(
+    group,
+    prompt,
+    chatJid,
+    async (result) => {
+      // Streaming output callback — called for each agent result
+      if (result.result) {
+        const raw =
+          typeof result.result === 'string'
+            ? result.result
+            : JSON.stringify(result.result);
+        // Strip <internal>...</internal> blocks — agent uses these for internal reasoning
+        const text = raw.replace(/<internal>[\s\S]*?<\/internal>/g, '').trim();
+        logger.info(
+          { group: group.name },
+          `Agent output: ${raw.slice(0, 200)}`,
+        );
+        if (text) {
+          await channel.sendMessage(chatJid, text);
+          outputSentToUser = true;
+        }
+        // Only reset idle timer on actual results, not session-update markers (result: null)
+        resetIdleTimer();
       }
-      // Only reset idle timer on actual results, not session-update markers (result: null)
-      resetIdleTimer();
-    }
 
-    if (result.status === 'success') {
-      queue.notifyIdle(chatJid);
-    }
+      if (result.status === 'success') {
+        queue.notifyIdle(chatJid);
+      }
 
-    if (result.status === 'error') {
-      hadError = true;
-    }
-  }, sessionIdToUse, model);
+      if (result.status === 'error') {
+        hadError = true;
+      }
+    },
+    sessionIdToUse,
+    model,
+  );
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
@@ -307,20 +323,36 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 // ---------------------------------------------------------------------------
 
 const MODEL_UPGRADES = [
-  { pattern: /\bopus\b/i,                           model: 'claude-opus-4-6',           strip: /\bopus\b:?\s*/i },
-  { pattern: /deep\s+research|research\s+this/i,    model: 'claude-opus-4-6',           strip: null },
-  { pattern: /\bsonnet\b/i,                         model: 'claude-sonnet-4-6',         strip: /\bsonnet\b:?\s*/i },
-  { pattern: /\bhaiku\b/i,                          model: 'claude-haiku-4-5-20251001', strip: /\bhaiku\b:?\s*/i },
-  { pattern: /\bgpt[-\s]?4o\b/i,                   model: 'gpt-4o',                    strip: /\bgpt[-\s]?4o\b:?\s*/i },
-  { pattern: /\bgemma\b/i,                          model: 'gemma-4-31b-it',            strip: /\bgemma\b:?\s*/i },
+  { pattern: /\bopus\b/i, model: 'claude-opus-4-6', strip: /\bopus\b:?\s*/i },
+  {
+    pattern: /deep\s+research|research\s+this/i,
+    model: 'claude-opus-4-6',
+    strip: null,
+  },
+  {
+    pattern: /\bsonnet\b/i,
+    model: 'claude-sonnet-4-6',
+    strip: /\bsonnet\b:?\s*/i,
+  },
+  {
+    pattern: /\bhaiku\b/i,
+    model: 'claude-haiku-4-5-20251001',
+    strip: /\bhaiku\b:?\s*/i,
+  },
+  {
+    pattern: /\bgpt[-\s]?4o\b/i,
+    model: 'gpt-4o',
+    strip: /\bgpt[-\s]?4o\b:?\s*/i,
+  },
+  { pattern: /\bgemma\b/i, model: 'gemma-4-31b-it', strip: /\bgemma\b:?\s*/i },
 ] as const;
 
 const CONTINUE_PATTERN = /\b(continue|follow[\s-]?up)\b/i;
 
 interface MessageIntent {
-  model: string | undefined;       // undefined = use ANTHROPIC_MODEL env default
-  useExistingSession: boolean;     // true if "continue" / "follow up" detected
-  cleanMessages: NewMessage[];     // messages with model keyword stripped
+  model: string | undefined; // undefined = use ANTHROPIC_MODEL env default
+  useExistingSession: boolean; // true if "continue" / "follow up" detected
+  cleanMessages: NewMessage[]; // messages with model keyword stripped
 }
 
 function parseMessageIntent(messages: NewMessage[]): MessageIntent {
@@ -363,8 +395,8 @@ async function runAgent(
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
-  sessionId?: string,   // undefined = fresh context (no history carried forward)
-  model?: string,       // undefined = use ANTHROPIC_MODEL env default
+  sessionId?: string, // undefined = fresh context (no history carried forward)
+  model?: string, // undefined = use ANTHROPIC_MODEL env default
 ): Promise<'success' | 'error' | 'rate-limited'> {
   const isMain = group.isMain === true;
 
