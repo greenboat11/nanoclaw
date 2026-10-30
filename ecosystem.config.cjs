@@ -7,7 +7,7 @@ module.exports = {
       interpreter: 'node',
       env: {
         NODE_ENV: 'production',
-        CREDENTIAL_PROXY_PORT: '3002',
+        CREDENTIAL_PROXY_PORT: '4002',
       },
       error_file: 'logs/nanoclaw.error.log',
       out_file: 'logs/nanoclaw.log',
