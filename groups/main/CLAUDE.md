@@ -36,12 +36,23 @@ When working as a sub-agent or teammate, only use `send_message` if instructed t
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+### Session start — always do this first:
+Read `/workspace/group/MEMORY.md`. It contains who Kyle is, recent session history, active threads, and pending items. This replaces the need for conversation history.
 
-When you learn something important:
-- Create files for structured data (e.g., `customers.md`, `preferences.md`)
+### Session end — always do this before finishing:
+Update `/workspace/group/MEMORY.md`:
+1. Add a 1–2 sentence entry under *Recent Sessions* with today's date summarizing what happened
+2. If *Recent Sessions* has more than 7 entries, delete the oldest one
+3. Update *Active Threads* and *Pending Items* if anything changed or resolved
+4. Keep the whole file under 1000 tokens — be concise
+
+### Long-term storage:
+The `conversations/` folder has full transcripts of past sessions — search it if you need details beyond what MEMORY.md covers.
+
+When you learn something important enough to be permanent (not just a session note):
+- Update the relevant section of `MEMORY.md` (e.g., add to About Me)
+- Or create a dedicated file (e.g., `preferences.md`) for structured data
 - Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
 
 ## WhatsApp Formatting (and other messaging apps)
 

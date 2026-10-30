@@ -21,6 +21,13 @@ groups/global/*
 # Secrets
 *.keys.json
 .env
+client_secret*.json
+
+# Runtime caches / Telegram update state
+google_models.json
+tg_chat.json
+tg_pool_updates.json
+tg_updates.json
 
 # Temp files
 .tmp-*

@@ -40,12 +40,22 @@ Files you create are saved in `/workspace/group/`. Use this for notes, research,
 
 ## Memory
 
-The `conversations/` folder contains searchable history of past conversations. Use this to recall context from previous sessions.
+### Session start — always do this first:
+If `/workspace/group/MEMORY.md` exists, read it. It contains who the user is, recent session history, active threads, and pending items.
+
+### Session end — always do this before finishing:
+If `/workspace/group/MEMORY.md` exists, update it:
+1. Add a 1–2 sentence entry under *Recent Sessions* with today's date
+2. If *Recent Sessions* has more than 7 entries, delete the oldest
+3. Update *Active Threads* and *Pending Items* if anything changed
+4. Keep the whole file under 1000 tokens
+
+### Long-term storage:
+The `conversations/` folder has full transcripts of past sessions.
 
 When you learn something important:
 - Create files for structured data (e.g., `customers.md`, `preferences.md`)
 - Split files larger than 500 lines into folders
-- Keep an index in your memory for the files you create
 
 ## Message Formatting
 

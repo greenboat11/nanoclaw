@@ -6,9 +6,11 @@ import {
   CREDENTIAL_PROXY_PORT,
   IDLE_TIMEOUT,
   POLL_INTERVAL,
+  TELEGRAM_BOT_POOL,
   TIMEZONE,
   TRIGGER_PATTERN,
 } from './config.js';
+import { initBotPool } from './channels/telegram.js';
 import { startCredentialProxy } from './credential-proxy.js';
 import './channels/index.js';
 import {
@@ -69,6 +71,8 @@ let sessions: Record<string, string> = {};
 let registeredGroups: Record<string, RegisteredGroup> = {};
 let lastAgentTimestamp: Record<string, string> = {};
 let messageLoopRunning = false;
+// Per-group backoff until timestamp (ms) — set when a run returns a 429-style error.
+const rateLimitBackoffUntil: Record<string, number> = {};
 
 const channels: Channel[] = [];
 const queue = new GroupQueue();
@@ -160,6 +164,13 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
 
   const isMainGroup = group.isMain === true;
 
+  // Don't retry a group that recently hit a rate limit — back off first.
+  const backoffUntil = rateLimitBackoffUntil[chatJid] ?? 0;
+  if (Date.now() < backoffUntil) {
+    logger.debug({ group: group?.name, backoffRemaining: backoffUntil - Date.now() }, 'Rate limit backoff active, skipping');
+    return true;
+  }
+
   const sinceTimestamp = lastAgentTimestamp[chatJid] || '';
   const missedMessages = getMessagesSince(
     chatJid,
@@ -180,7 +191,18 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (!hasTrigger) return true;
   }
 
-  const prompt = formatMessages(missedMessages, TIMEZONE);
+  // Determine model and session strategy from message keywords
+  const { model, useExistingSession, cleanMessages } = parseMessageIntent(missedMessages);
+  // Fresh context by default — only carry history when "continue"/"follow up" is present
+  const sessionIdToUse = useExistingSession ? sessions[group.folder] : undefined;
+  if (model) {
+    logger.info({ group: group.name, model }, 'Model upgraded via keyword');
+  }
+  if (useExistingSession) {
+    logger.info({ group: group.name }, 'Continuing existing session');
+  }
+
+  const prompt = formatMessages(cleanMessages, TIMEZONE);
 
   // Advance cursor so the piping path in startMessageLoop won't re-fetch
   // these messages. Save the old cursor so we can roll back on error.
@@ -237,10 +259,25 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
     if (result.status === 'error') {
       hadError = true;
     }
-  });
+  }, sessionIdToUse, model);
 
   await channel.setTyping?.(chatJid, false);
   if (idleTimer) clearTimeout(idleTimer);
+
+  if (output === 'rate-limited') {
+    // Back off for 5 minutes before retrying — prevents cascade 429 loops.
+    // Return true so the queue doesn't immediately re-enqueue; the backoff
+    // check at the top of this function will silently skip until it clears.
+    const BACKOFF_MS = 5 * 60 * 1000;
+    rateLimitBackoffUntil[chatJid] = Date.now() + BACKOFF_MS;
+    lastAgentTimestamp[chatJid] = previousCursor;
+    saveState();
+    logger.warn(
+      { group: group.name, backoffMinutes: 5 },
+      'Rate limited (429), backing off before retry',
+    );
+    return true;
+  }
 
   if (output === 'error' || hadError) {
     // If we already sent output to the user, don't roll back the cursor —
@@ -265,14 +302,71 @@ async function processGroupMessages(chatJid: string): Promise<boolean> {
   return true;
 }
 
+// ---------------------------------------------------------------------------
+// Model keyword routing + fresh-context detection
+// ---------------------------------------------------------------------------
+
+const MODEL_UPGRADES = [
+  { pattern: /\bopus\b/i,                           model: 'claude-opus-4-6',           strip: /\bopus\b:?\s*/i },
+  { pattern: /deep\s+research|research\s+this/i,    model: 'claude-opus-4-6',           strip: null },
+  { pattern: /\bsonnet\b/i,                         model: 'claude-sonnet-4-6',         strip: /\bsonnet\b:?\s*/i },
+  { pattern: /\bhaiku\b/i,                          model: 'claude-haiku-4-5-20251001', strip: /\bhaiku\b:?\s*/i },
+  { pattern: /\bgpt[-\s]?4o\b/i,                   model: 'gpt-4o',                    strip: /\bgpt[-\s]?4o\b:?\s*/i },
+  { pattern: /\bgemma\b/i,                          model: 'gemma-4-31b-it',            strip: /\bgemma\b:?\s*/i },
+] as const;
+
+const CONTINUE_PATTERN = /\b(continue|follow[\s-]?up)\b/i;
+
+interface MessageIntent {
+  model: string | undefined;       // undefined = use ANTHROPIC_MODEL env default
+  useExistingSession: boolean;     // true if "continue" / "follow up" detected
+  cleanMessages: NewMessage[];     // messages with model keyword stripped
+}
+
+function parseMessageIntent(messages: NewMessage[]): MessageIntent {
+  let model: string | undefined;
+  let useExistingSession = false;
+  const cleanMessages = messages.map((m) => ({ ...m }));
+
+  // Inspect only the most recent non-bot message for keywords
+  for (let i = cleanMessages.length - 1; i >= 0; i--) {
+    const msg = cleanMessages[i];
+    if (msg.is_bot_message) continue;
+
+    const content = msg.content;
+
+    if (CONTINUE_PATTERN.test(content)) {
+      useExistingSession = true;
+    }
+
+    for (const kw of MODEL_UPGRADES) {
+      if (kw.pattern.test(content)) {
+        model = kw.model;
+        if (kw.strip) {
+          const stripped = content.replace(kw.strip, '').trim();
+          if (stripped) cleanMessages[i] = { ...msg, content: stripped };
+        }
+        break;
+      }
+    }
+
+    break; // Only the most recent non-bot message drives routing
+  }
+
+  return { model, useExistingSession, cleanMessages };
+}
+
+// ---------------------------------------------------------------------------
+
 async function runAgent(
   group: RegisteredGroup,
   prompt: string,
   chatJid: string,
   onOutput?: (output: ContainerOutput) => Promise<void>,
-): Promise<'success' | 'error'> {
+  sessionId?: string,   // undefined = fresh context (no history carried forward)
+  model?: string,       // undefined = use ANTHROPIC_MODEL env default
+): Promise<'success' | 'error' | 'rate-limited'> {
   const isMain = group.isMain === true;
-  const sessionId = sessions[group.folder];
 
   // Update tasks snapshot for container to read (filtered by group)
   const tasks = getAllTasks();
@@ -320,6 +414,7 @@ async function runAgent(
         chatJid,
         isMain,
         assistantName: ASSISTANT_NAME,
+        model,
       },
       (proc, containerName) =>
         queue.registerProcess(chatJid, proc, containerName, group.folder),
@@ -336,6 +431,7 @@ async function runAgent(
         { group: group.name, error: output.error },
         'Container agent error',
       );
+      if (output.error?.includes('429')) return 'rate-limited';
       return 'error';
     }
 
@@ -590,11 +686,24 @@ async function main(): Promise<void> {
       continue;
     }
     channels.push(channel);
-    await channel.connect();
+    try {
+      await channel.connect();
+    } catch (err) {
+      logger.error(
+        { channel: channelName, err },
+        'Channel failed to connect — skipping. Re-run the channel skill to re-authenticate.',
+      );
+      channels.pop();
+    }
   }
   if (channels.length === 0) {
     logger.fatal('No channels connected');
     process.exit(1);
+  }
+
+  // Initialize Telegram bot pool for agent swarm (if configured)
+  if (TELEGRAM_BOT_POOL.length > 0) {
+    await initBotPool(TELEGRAM_BOT_POOL);
   }
 
   // Start subsystems (independently of connection handler)
@@ -641,11 +750,15 @@ async function main(): Promise<void> {
   });
 }
 
-// Guard: only run when executed directly, not when imported by tests
+// Guard: only run when executed directly, not when imported by tests.
+// NANOCLAW_FORCE_RUN=1 is set by start.cjs (PM2 launcher) because in that
+// case argv[1] points to start.cjs, not this file.
+import { pathToFileURL } from 'url';
 const isDirectRun =
-  process.argv[1] &&
-  new URL(import.meta.url).pathname ===
-    new URL(`file://${process.argv[1]}`).pathname;
+  process.env.NANOCLAW_FORCE_RUN === '1' ||
+  (process.argv[1] &&
+    new URL(import.meta.url).pathname ===
+      pathToFileURL(process.argv[1]).pathname);
 
 if (isDirectRun) {
   main().catch((err) => {
